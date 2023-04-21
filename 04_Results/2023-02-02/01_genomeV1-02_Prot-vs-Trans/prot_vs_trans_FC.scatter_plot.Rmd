@@ -1,0 +1,132 @@
+---
+title: "Compare FC prot-vs-trans"
+author: "Timothy Stephens"
+date: "27/02/2023"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+
+
+# Setup
+
+Setup R env. Load packages and set default image export formats, size and resolution.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.height = 8, 
+                      fig.width = 8, 
+                      dev = c("png", "pdf"),
+                      dpi = 1000)
+library(tibble)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(ggpmisc)
+library(ggtext)
+library(RColorBrewer)
+library(ggpubr)
+library(plotly)
+library(htmlwidgets)
+options(scipen = 999) #Prevent scientific notation
+```
+
+
+```{r set_envs}
+xlim.min <- -10
+xlim.max <-  10
+ylim.min <- -10
+ylim.max <-  10
+
+point.color <- c('DEP&DEG'='#f29790','DEG'='#9cc13f','DEP'='#5acfd2','none'='#d49cff')
+
+scatter_plot <- function(df, title="", tag="", text.scale=1) {
+  x.name <- paste(title,".Transcript.FC", sep='')
+  y.name <- paste(title,".Protein.FC", sep='')
+  g.name <- paste(title,".Regulation", sep='')
+  
+  df <- df[, c("Name", "top_hit_id", "top_hit_evalue", "top_hit_description", 
+               y.name, x.name, g.name)
+           ] %>% 
+    arrange(desc(!!sym(g.name)))
+  
+  df$top_hit_evalue <- formatC(df$top_hit_evalue, format = "e", digits = 2)
+
+  print("")
+  print(paste("Plotting matrix with",nrow(df),"rows using rows",x.name,",",y.name,"and",g.name))
+  
+  p <- ggplot(df,aes(x=!!ensym(x.name), y=!!ensym(y.name))) +
+    stat_poly_line(se=FALSE, col="red", formula = y ~ x) + # Add trend line
+    stat_poly_eq(mapping = use_label(c("n", "R2", "eq")), label.y = 0.95, label.x = 0.05, size=5*text.scale) +   # Add equation
+    annotate("text", x=xlim.max-1, y=ylim.max-1, label= "Q1", size=6*text.scale) +
+    annotate("text", x=xlim.min+1, y=ylim.max-1, label= "Q2", size=6*text.scale) +
+    annotate("text", x=xlim.min+1, y=ylim.min+1, label= "Q3", size=6*text.scale) +
+    annotate("text", x=xlim.max-1, y=ylim.min+1, label= "Q4", size=6*text.scale) +
+    geom_hline(yintercept = 0, color = "black", size = 0.5*text.scale) +
+    geom_vline(xintercept = 0, color = "black", size = 0.5*text.scale) +
+    geom_point(aes(col=!!sym(g.name), 
+                   label=Name, label2=top_hit_id, label3=top_hit_evalue, label4=top_hit_description
+                   ), 
+               size=1*text.scale) + # Define 'col' here to stop stat_* from adding trend line for each color/group
+    scale_x_continuous(limits=c(xlim.min, xlim.max), expand = c(0, 0), breaks = seq(xlim.min, xlim.max, by = 1)) +
+    scale_y_continuous(limits=c(ylim.min, ylim.max), expand = c(0, 0), breaks = seq(ylim.min, ylim.max, by = 1)) +
+    labs(title = title,
+         x = 'Transcript log2 fold change',
+         y = 'Protein log2 fold change',
+         tag = tag) +
+    scale_color_manual(values=point.color) +
+    theme_light() +
+    theme(text            = element_text(family="Helvetica"),
+          plot.title      = element_text(size=24*text.scale, face="bold", hjust=0.5),
+          plot.tag        = element_text(size=24*text.scale, face="bold"),
+          axis.title.x    = element_text(size=16*text.scale),
+          axis.title.y    = element_text(size=16*text.scale),
+          axis.line       = element_line(color="black"),
+          axis.line.x     = element_line(color="black"),
+          axis.ticks      = element_line(color="black"),
+          legend.key.size = unit(1*text.scale, 'cm'),             # Legend key size
+          legend.title    = element_text(size=14*text.scale),     # Legend title font size
+          legend.text     = element_text(size=12*text.scale),     # Legend text font size
+          aspect.ratio=1)                                         # Make plot square
+  return(p)
+}
+```
+
+
+
+
+
+```{r plot_timepoints}
+names <- read.table("Mcapitata_V1_proteomic_data.tsv", sep="\t", header=TRUE, quote="", fill=FALSE, comment.char = '')[,1]
+df <- read.table("Mcapitata_V1_multiomics_results.tsv", sep="\t", header=TRUE, quote="", fill=FALSE, comment.char = '')
+dim(df)
+df <- df[df$Name %in% names,]
+dim(df)
+
+TP1 <- scatter_plot(df, "TP1", "A", 0.6)
+TP3 <- scatter_plot(df, "TP3", "B", 0.6)
+TP5 <- scatter_plot(df, "TP5", "C", 0.6)
+
+out.dir <- "interactive_html_plots"
+dir.create(out.dir, showWarnings=FALSE)
+saveWidget(ggplotly(TP1), file=paste(out.dir,"prot_vs_trans.FC_TP1.scatter.html", sep='/'))
+saveWidget(ggplotly(TP3), file=paste(out.dir,"prot_vs_trans.FC_TP3.scatter.html", sep='/'))
+saveWidget(ggplotly(TP5), file=paste(out.dir,"prot_vs_trans.FC_TP5.scatter.html", sep='/'))
+
+ggarrange(TP1 + rremove("legend"), 
+          TP3 + rremove("legend"), 
+          TP5 + rremove("legend"), 
+          get_legend(TP1),
+          ncol = 2, nrow = 2)
+```
+
+
+
+
+
+# Session Info
+
+```{r ressionInfo}
+sessionInfo()
+```

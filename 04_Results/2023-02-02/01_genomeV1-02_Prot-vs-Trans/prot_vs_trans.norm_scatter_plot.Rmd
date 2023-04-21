@@ -1,0 +1,163 @@
+---
+title: "Compare prot-vs-trans counts"
+author: "Timothy Stephens"
+date: "27/02/2023"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+
+
+# Setup
+
+Setup R env. Load packages and set default image export formats, size and resolution.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.height = 8, 
+                      fig.width = 8, 
+                      dev = c("png", "pdf"),
+                      dpi = 1000)
+library(tibble)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(ggpmisc)
+library(ggtext)
+library(RColorBrewer)
+library(ggpubr)
+library(plotly)
+library(htmlwidgets)
+options(scipen = 999) #Prevent scientific notation
+```
+
+
+```{r set_envs}
+xlim.min <-  0
+xlim.max <-  15
+ylim.min <-  0
+ylim.max <-  15
+
+scatter_plot <- function(df, title="", tag="", text.scale=1) {
+  x.name <- paste("Transcript.",title, sep='')
+  y.name <- paste("Protein.",title, sep='')
+  
+  df <- df[, c("Name", "top_hit_id", "top_hit_evalue", "top_hit_description", 
+               y.name, x.name)
+           ] %>%
+    mutate(Protein_Abundance_log    = log2(get(y.name)+1)) %>%
+    mutate(Transcript_Abundance_log = log2(get(x.name)+1))
+  
+  print("")
+  print(paste("Plotting matrix with",nrow(df),"rows using rows",x.name,",",y.name))
+  
+  p <- ggplot(df,aes(x=Transcript_Abundance_log, y=Protein_Abundance_log)) +
+    geom_point(aes(label=Name, label2=top_hit_id, label3=top_hit_evalue, label4=top_hit_description), 
+               size=1*text.scale) +
+    stat_poly_line(se=FALSE, col="red", formula = y ~ x) + # Add trend line
+    stat_poly_eq(mapping = use_label(c("n", "R2", "eq")), label.y = 0.95, label.x = 0.05, size=5*text.scale) +   # Add equation
+    scale_x_continuous(limits=c(xlim.min, xlim.max), expand = c(0, 0), breaks = seq(xlim.min, xlim.max, by = 1)) +
+    scale_y_continuous(limits=c(ylim.min, ylim.max), expand = c(0, 0), breaks = seq(ylim.min, ylim.max, by = 1)) +
+    labs(title = title,
+         x = 'Transcript Expression [log2(TPM+1)]',
+         y = 'Protein Expression [log2(normalized abundance+1)]',
+         tag = tag) +
+    theme_light() +
+    theme(text         = element_text(family="Helvetica"),
+          plot.title   = element_text(size=20*text.scale, face="bold", hjust=0.5),
+          plot.tag     = element_text(size=32*text.scale, face="bold"),
+          axis.title.x = element_text(size=16*text.scale),
+          axis.title.y = element_text(size=16*text.scale),
+          axis.text    = element_text(size=14*text.scale),
+          axis.line    = element_line(color="black", linewidth=0.4*text.scale),
+          axis.line.x  = element_line(color="black"),
+          axis.ticks   = element_line(color="black"),
+          aspect.ratio=1)                              # Make plot square
+  return(p)
+}
+```
+
+
+
+
+
+```{r plot_timepoints}
+names <- read.table("Mcapitata_V1_proteomic_data.tsv", sep="\t", header=TRUE, quote="", fill=FALSE, comment.char = '')[,1]
+df <- read.table("Mcapitata_V1_multiomics_results.tsv", sep="\t", header=TRUE, quote="", fill=FALSE, comment.char = '')
+dim(df)
+df <- df[df$Name %in% names,]
+dim(df)
+
+text.scale <- 0.3
+
+T1_Amb_1603 <- scatter_plot(df, "MC.289_T1.Amb_1603", "A", text.scale)
+T1_Amb_1609 <- scatter_plot(df, "MC.289_T1.Amb_1609", "B", text.scale)
+T1_HiT_2023 <- scatter_plot(df, "MC.289_T1.HiT_2023", "C", text.scale)
+T1_HiT_2878 <- scatter_plot(df, "MC.289_T1.HiT_2878", "D", text.scale)
+
+T3_Amb_1595 <- scatter_plot(df, "MC.289_T3.Amb_1595", "E", text.scale)
+T3_Amb_2741 <- scatter_plot(df, "MC.289_T3.Amb_2741", "F", text.scale)
+T3_HiT_2058 <- scatter_plot(df, "MC.289_T3.HiT_2058", "G", text.scale)
+T3_HiT_2183 <- scatter_plot(df, "MC.289_T3.HiT_2183", "H", text.scale)
+
+T5_Amb_1721 <- scatter_plot(df, "MC.289_T5.Amb_1721", "I", text.scale)
+T5_Amb_2874 <- scatter_plot(df, "MC.289_T5.Amb_2874", "J", text.scale)
+T5_HiT_1341 <- scatter_plot(df, "MC.289_T5.HiT_1341", "K", text.scale)
+T5_HiT_2998 <- scatter_plot(df, "MC.289_T5.HiT_2998", "L", text.scale)
+
+
+Field_289_1 <- scatter_plot(df, "MC.289_Field_289.1", "M", text.scale)
+Field_289_2 <- scatter_plot(df, "MC.289_Field_289.2", "N", text.scale)
+
+
+
+out.dir <- "interactive_html_plots"
+dir.create(out.dir, showWarnings=FALSE)
+
+saveWidget(ggplotly(T1_Amb_1603), file=paste(out.dir,"prot_vs_trans.T1_Amb_1603.scatter.html", sep='/'))
+saveWidget(ggplotly(T1_Amb_1609), file=paste(out.dir,"prot_vs_trans.T1_Amb_1609.scatter.html", sep='/'))
+saveWidget(ggplotly(T1_HiT_2023), file=paste(out.dir,"prot_vs_trans.T1_HiT_2023.scatter.html", sep='/'))
+saveWidget(ggplotly(T1_HiT_2878), file=paste(out.dir,"prot_vs_trans.T1_HiT_2878.scatter.html", sep='/'))
+
+saveWidget(ggplotly(T3_Amb_1595), file=paste(out.dir,"prot_vs_trans.T3_Amb_1595.scatter.html", sep='/'))
+saveWidget(ggplotly(T3_Amb_2741), file=paste(out.dir,"prot_vs_trans.T3_Amb_2741.scatter.html", sep='/'))
+saveWidget(ggplotly(T3_HiT_2058), file=paste(out.dir,"prot_vs_trans.T3_HiT_2058.scatter.html", sep='/'))
+saveWidget(ggplotly(T3_HiT_2183), file=paste(out.dir,"prot_vs_trans.T3_HiT_2183.scatter.html", sep='/'))
+
+saveWidget(ggplotly(T5_Amb_1721), file=paste(out.dir,"prot_vs_trans.T5_Amb_1721.scatter.html", sep='/'))
+saveWidget(ggplotly(T5_Amb_2874), file=paste(out.dir,"prot_vs_trans.T5_Amb_2874.scatter.html", sep='/'))
+saveWidget(ggplotly(T5_HiT_1341), file=paste(out.dir,"prot_vs_trans.T5_HiT_1341.scatter.html", sep='/'))
+saveWidget(ggplotly(T5_HiT_2998), file=paste(out.dir,"prot_vs_trans.T5_HiT_2998.scatter.html", sep='/'))
+
+saveWidget(ggplotly(Field_289_1), file=paste(out.dir,"prot_vs_trans.Field_289_1.scatter.html", sep='/'))
+saveWidget(ggplotly(Field_289_2), file=paste(out.dir,"prot_vs_trans.Field_289_2.scatter.html", sep='/'))
+
+
+
+ggarrange(T1_Amb_1603 + rremove("legend"), 
+          T1_Amb_1609 + rremove("legend"), 
+          T1_HiT_2023 + rremove("legend"), 
+          T1_HiT_2878 + rremove("legend"), 
+          T3_Amb_1595 + rremove("legend"), 
+          T3_Amb_2741 + rremove("legend"), 
+          T3_HiT_2058 + rremove("legend"), 
+          T3_HiT_2183 + rremove("legend"), 
+          T5_Amb_1721 + rremove("legend"), 
+          T5_Amb_2874 + rremove("legend"), 
+          T5_HiT_1341 + rremove("legend"), 
+          T5_HiT_2998 + rremove("legend"), 
+          Field_289_1 + rremove("legend"), 
+          Field_289_2 + rremove("legend"), 
+          ncol = 4, nrow = 4)
+```
+
+
+
+
+
+# Session Info
+
+```{r ressionInfo}
+sessionInfo()
+```

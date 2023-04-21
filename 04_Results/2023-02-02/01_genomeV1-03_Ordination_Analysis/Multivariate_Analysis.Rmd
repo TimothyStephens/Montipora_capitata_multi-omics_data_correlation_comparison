@@ -1,0 +1,456 @@
+---
+title: "M. capitata genome v1 Ordination Analysis"
+author: "Timothy Stephens"
+date: "02/03/2023"
+output: 
+  html_document:
+    keep_md: yes
+---
+
+
+
+# Setup
+
+Setup R env. Load packages and set default image export formats, size and resolution.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.height = 8, 
+                      fig.width = 12, 
+                      dev = c("png", "pdf"),
+                      dpi = 1000)
+library(lubridate)
+#library(tidyverse)
+library(seacarb)
+library(matrixStats)
+library(vegan)
+library(lme4)
+library(ape)
+library(emmeans)
+library(gridExtra)
+library(multcompView)
+library(plotrix)
+library(reshape2)
+library(ggpubr)
+library(sva, warn.conflicts = FALSE)
+library(mixOmics)
+library(ggforce)
+library(plyr)
+library(dplyr)
+library(plotly)
+library(gapminder)
+library(htmlwidgets)
+options(scipen = 999) #Prevent scientific notation
+set.seed(54321)
+
+#source("ggbiplot/R/ggbiplot.r")
+```
+
+
+
+Plot settings.
+```{r plot_settings}
+options(repr.plot.width = 2, repr.plot.height = 3)
+label.decimal.rounding <- 1
+plot.text.size  <- 12
+plot.title.size <- 10
+
+Colors <- c("T1-Amb" = "#00ebf7", "T3-Amb" = "#01ff00", "T5-Amb" = "#006600", "Field" = "#660099", "T1-HiT" = "#fad700", "T3-HiT" = "#ff7c00", "T5-HiT" = "#ff0000")
+```
+
+
+
+# Functions
+
+Functions for plotting and analyzing data.
+
+```{r func-run_PERMANOVA}
+#' Run PERMANOVA analysis
+#' 
+#' @param data expression/accumulation dataframe (rownames=gene_names; colnames=sample_names)
+#' @param samplesInfo sample_names metadata (required: "TimePoint", "Treatment", and "Tank")
+#' @param out.prefix prefix of output csv file with PERMANOVA results
+#' @param permutations number of permutations to perform (default: 999)
+#' @return PERMANOVA results from vegan::adonis2
+run_PERMANOVA <- function(data, samplesInfo, out.prefix, permutations=999){
+  # Transpose df (samples as rownames)
+  t.data <- t(data)
+  t.data <- as.data.frame(t.data)
+
+  # Identify factors
+  #  - Will only return overlap between data and samplesInfo
+  #  - Make the "by" column (which was used for merging) rownames.
+  t.data.sampleInfo <- merge(samplesInfo, t.data, by = 0) %>%
+    tibble::column_to_rownames(var = "Row.names")
+  t.data.sampleInfo <- t.data.sampleInfo[row.names(t.data), ]
+  
+  # Use square root or proportions to minimize influence of most abundant groups
+  t.data.sqrt <- sqrt(t.data)
+  
+  # Create a dissimilarity matrix (vegan)
+  t.data.dist <- vegdist(t.data.sqrt, method='bray')
+  
+  # Run perMANOVA (vegan)
+  mod.data <- adonis2(t.data.dist ~  TimePoint * Treatment, 
+                      data = t.data.sampleInfo, 
+                      permutations = permutations, 
+                      strata = t.data.sampleInfo$Tank, 
+                      method = 'bray')
+  
+  # Write PERMANOVA results to file
+  write.csv(mod.data, paste(out.prefix,".PERMANOVA_results.csv", sep=''))
+  
+  # Return PERMANOVA results from function
+  return(mod.data)
+}
+```
+
+
+
+```{r func-plot_PCA}
+#' Plot PCA
+#' 
+#' @param data expression/accumulation dataframe (rownames=gene_names; colnames=sample_names)
+#' @param samplesInfo sample_names metadata (required: "Condition", "Treatment", and "Plug.ID")
+#' @param out.prefix prefix of output html file with PCA plot
+#' @param plot.title plot title
+#' @return PCA plot as a ggplot2 object
+plot_PCA <- function(data, samplesInfo, out.prefix, plot.title){
+  # Transpose df (samples as rownames)
+  t.data <- t(data)
+  t.data <- as.data.frame(t.data)
+  
+  # Run PCA
+  pca.out <- prcomp(t.data,
+                    center = FALSE,
+                    scale. = FALSE)
+  pca.out.summary <- summary(pca.out)
+  #print(pca.out.summary)
+  
+  # Create plotting dataframe by pulling out axes and joining to metadata
+  PC1.df <- data.frame(pca.out$x[,1])
+  names(PC1.df)[1] <- 'PC1'
+  
+  PC2.df <- data.frame(pca.out$x[,2])
+  names(PC2.df)[1] <- 'PC2'
+  
+  # Merge PCA results with metadata sampleInfo file (used for easy access to variables for plotting)
+  MyMerge <- function(x, y){
+    return(merge(x, y, by=0, all.x=F, all.y= F) %>% 
+             tibble::column_to_rownames(var = "Row.names"))
+  }
+  pca.data <- Reduce(MyMerge, list(samplesInfo, PC1.df, PC2.df))
+  #print(pca.data)
+  
+  # Calculate the percent of variance explained by first two axes and format for plot labels
+  PCA.axis1.var <- pca.out.summary$importance[2,1]
+  PCA.axis2.var <- pca.out.summary$importance[2,2]
+  PCA.axis1.var.label <- paste("PC1 (",round(PCA.axis1.var*100,label.decimal.rounding),"%)", sep='')
+  PCA.axis2.var.label <- paste("PC2 (",round(PCA.axis2.var*100,label.decimal.rounding),"%)", sep='')
+  
+  # Plot PCA
+  pca.plot <- ggplot(pca.data, aes(x = PC1, y = PC2)) +
+              geom_point(aes(color = Condition, shape = Treatment, size = 2)) +
+              scale_color_manual(values = Colors) +
+              geom_mark_ellipse(aes(color = Condition),
+                                expand = unit(1,"mm")) +
+              labs(title=plot.title,
+                   x=PCA.axis1.var.label,
+                   y=PCA.axis2.var.label) +
+              geom_text(label=pca.data$Plug.ID,
+                        check_overlap=F) +
+              theme(text       = element_text(family="Helvetica", size = plot.text.size),
+                    plot.title = element_text(family="Helvetica", size = plot.title.size, hjust = 0.5),
+                    aspect.ratio=1)
+  
+  # Write PCA plot as interactive HTML file
+  saveWidget(suppressWarnings(ggplotly(pca.plot)), file=paste(out.prefix,".PCA.html", sep=''))
+  
+  # Return PCA plot from function
+  return(pca.plot)
+}
+```
+
+
+
+```{r func-plot_PCoA}
+#' Plot PCoA
+#' 
+#' @param data expression/accumulation dataframe (rownames=gene_names; colnames=sample_names)
+#' @param samplesInfo sample_names metadata (required: "Condition", "Treatment", and "Plug.ID")
+#' @param out.prefix prefix of output html file with PCoA plot
+#' @param plot.title plot title
+#' @return PCoA plot as a ggplot2 object
+plot_PCoA <- function(data, samplesInfo, out.prefix, plot.title){
+  # Transpose df (samples as rownames)
+  t.data <- t(data)
+  t.data <- as.data.frame(t.data)
+  
+  # Identify factors
+  #  - Will only return overlap between data and samplesInfo
+  #  - Make the "by" column (which was used for merging) rownames.
+  t.data.sampleInfo <- merge(samplesInfo, t.data, by = 0) %>%
+    tibble::column_to_rownames(var = "Row.names")
+  
+  # Use square root or proportions to minimize influence of most abundant groups
+  t.data.sqrt <- sqrt(t.data)
+  
+  # Create a dissimilarity matrix (vegan)
+  t.data.dist <- vegdist(t.data.sqrt, method='bray')
+  
+  # Run PCoA (vegan)
+  pcoa <- wcmdscale(t.data.dist, k = 2, eig = TRUE, add = "cailliez")
+  
+  # Create plotting dataframe by pulling out axes and joining to metadata
+  axis1 <- pcoa$points[,1]
+  axis1.df <- data.frame(axis1)
+  axis2 <- pcoa$points[,2]
+  axis2.df <- data.frame(axis2)
+  
+  # Merge PCA results with metadata sampleInfo file (used for easy access to variables for plotting)
+  MyMerge <- function(x, y){
+    return(merge(x, y, by=0, all.x=F, all.y= F) %>% 
+             tibble::column_to_rownames(var = "Row.names"))
+  }
+  pcoa.data <- Reduce(MyMerge, list(samplesInfo, axis1.df, axis2.df))
+  #print(pcoa.data)
+  
+  # Calculate the percent of variance explained by first two axes.
+  pcoa.axis1.var <- sum((as.vector(pcoa$eig)/sum(pcoa$eig))[1])
+  pcoa.axis2.var <- sum((as.vector(pcoa$eig)/sum(pcoa$eig))[2])
+  pcoa.axis1.var.label <- paste("PCoA 1 (",round(pcoa.axis1.var*100,label.decimal.rounding),"%)", sep='')
+  pcoa.axis2.var.label <- paste("PCoA 2 (",round(pcoa.axis2.var*100,label.decimal.rounding),"%)", sep='')
+  
+  pcoa.plot <- ggplot(pcoa.data, aes(x = axis1, y = axis2)) +
+    geom_point(aes(color = Condition, shape = Treatment, size = 2)) +
+    scale_color_manual(values = Colors) +
+    geom_mark_ellipse(aes(color = Condition),
+                      expand = unit(1,"mm")) +
+    labs(title=plot.title,
+         x=pcoa.axis1.var.label,
+         y=pcoa.axis2.var.label) +
+    geom_text(label=pcoa.data$Plug.ID,
+              check_overlap=F) +
+    theme(text       = element_text(family="Helvetica", size = plot.text.size),
+          plot.title = element_text(family="Helvetica", size = plot.title.size, hjust = 0.5),
+          aspect.ratio=1)
+
+  # Write PCoA plot as interactive HTML file
+  saveWidget(suppressWarnings(ggplotly(pcoa.plot)), file=paste(out.prefix,".PCoA.html", sep=''))
+  
+  # Return PCoA plot from function
+  return(pcoa.plot)
+}
+```
+
+
+
+```{r func-plot_PLS-DA}
+#' Plot PLS-DA
+#' 
+#' @param data expression/accumulation dataframe (rownames=gene_names; colnames=sample_names)
+#' @param samplesInfo sample_names metadata (required: "Group", "Condition", "Treatment", and "Plug.ID"). Where "Group" is Genotype+TimePoint+Treatment
+#' @param out.prefix prefix of output html file with PLS-DA plot
+#' @param plot.title plot title
+#' @return PLS-DA plot as a ggplot2 object
+plot_PLSDA <- function(data, samplesInfo, out.prefix, plot.title){
+  # Transpose df (samples as rownames)
+  t.data <- t(data)
+  t.data <- as.data.frame(t.data)
+  
+  # Set "group" as vector
+  samplesInfo <- samplesInfo %>% filter(row.names(.) %in% colnames(data))
+  sample.info <- samplesInfo$Group
+  sample.info <- as.factor(sample.info)
+
+  # Determine the number of components to retain (ncomp -> K−1, where K is the number of classes)
+  # In this case the components are the treatemnt "Groups" i.e., 
+  #      - MC-289_Field MC-289_T1-Amb MC-289_T1-HiT MC-289_T3-Amb MC-289_T3-HiT MC-289_T5-Amb MC-289_T5-HiT
+  # Total 7 levels (6 ncomp's)
+  sample.class.number <- length(levels(sample.info))
+  k <- sample.class.number-1
+  #print(paste("Running with k=",k, sep=''))
+  
+  # Check data for correct dimensions
+  #print(summary(sample.info))
+  #print(length(sample.info))
+  #print(dim(t.data))
+  
+  # Create PLSDA object
+  plsda <- splsda(t.data, sample.info, ncomp = k, scale = FALSE, near.zero.var = TRUE) 
+  
+  # Pull PLS-DA 1 & 2
+  plsda.df <- data.frame(plsda$variates$X[,1:2])
+  names(plsda.df)[1] <- 'PLSDA1'
+  names(plsda.df)[2] <- 'PLSDA2'
+  
+  # Merge PCA results with metadata sampleInfo file (used for easy access to variables for plotting)
+  MyMerge <- function(x, y){
+    return(merge(x, y, by=0, all.x=F, all.y= F) %>% 
+             tibble::column_to_rownames(var = "Row.names"))
+  }
+  plsda.data <- Reduce(MyMerge, list(samplesInfo, plsda.df))
+  #print(plsda.data)
+  
+  # Calculate the percent of variance explained by first two axes.
+  plsda$prop_expl_var$X
+  plsda.axis1.var <- plsda$prop_expl_var$X[1]
+  plsda.axis2.var <- plsda$prop_expl_var$X[2]
+  plsda.axis1.var.label <- paste("PLS-DA 1 (",round(plsda.axis1.var*100,label.decimal.rounding),"%)", sep='')
+  plsda.axis2.var.label <- paste("PLS-DA 2 (",round(plsda.axis2.var*100,label.decimal.rounding),"%)", sep='')
+  
+  # Plot initial PLSDA object
+  plsda.plot <- ggplot(plsda.data, aes(x = PLSDA1, y = PLSDA2)) +
+    geom_point(aes(color = Condition, shape = Treatment, size = 2)) +
+    scale_color_manual(values = Colors) +
+    geom_mark_ellipse(aes(color = Condition),
+                      expand = unit(1,"mm")) +
+    labs(title=plot.title,
+         x=plsda.axis1.var.label,
+         y=plsda.axis2.var.label) +
+    geom_text(label=plsda.data$Plug.ID,
+              check_overlap=F) +
+    theme(text       = element_text(family="Helvetica", size = plot.text.size),
+          plot.title = element_text(family="Helvetica", size = plot.title.size, hjust = 0.5),
+          aspect.ratio=1)
+  
+  # Write PLS-DA plot as interactive HTML file
+  saveWidget(suppressWarnings(ggplotly(plsda.plot)), file=paste(out.prefix,".PLS-DA.html", sep=''))
+  
+  # Return PLS-DA plot from function
+  return(plsda.plot)
+}
+```
+
+
+
+
+
+# Sample metadata
+
+Load sample metadata to use for all xpression/accumulation datasets.
+```{r load_data}
+# Make "Sample.ID" row names
+samplesInfo <- read.table("samples_info.txt", h = T, row.names = NULL, sep = "\t", check.names = F) %>% 
+  tibble::column_to_rownames(var = "Sample.ID")
+
+# Convert to character variables (so they are treated as descrete and not continuious) and factors.
+samplesInfo$Treatment <- as.factor(as.character(samplesInfo$Treatment))
+samplesInfo$TimePoint <- as.factor(as.character(samplesInfo$TimePoint))
+samplesInfo$Tank      <- as.factor(as.character(samplesInfo$Tank))
+
+samplesInfo
+```
+
+
+
+
+
+# Analyze proteomic data
+
+```{r proteomic_data}
+# Load expression data:
+#   - Make "Names" column rownames
+#   - Make "NA" values "0"
+proteomic.data <- read.table("Mcapitata_V1_proteomic_data.tsv", h = T, row.names = NULL, sep = "\t", check.names = F) %>% 
+  tibble::column_to_rownames(var = "Name") %>% 
+  replace(is.na(.), 0)
+dim(proteomic.data)
+
+# Set file names
+out.prefix <- "Mcapitata_V1_proteomic_data"
+
+run_PERMANOVA(proteomic.data, samplesInfo, out.prefix, permutations=how(nperm=190, minperm=190))
+proteomic.PCA       <- plot_PCA(     proteomic.data, samplesInfo, out.prefix, "Proteomic data (PCA)")
+proteomic.PCoA      <- plot_PCoA(    proteomic.data, samplesInfo, out.prefix, "Proteomic data (PCoA)")
+proteomic.PLSDA     <- plot_PLSDA(   proteomic.data, samplesInfo, out.prefix, "Proteomic data (sPLS-DA)")
+```
+
+
+
+
+
+# Analyze transcriptomic data
+
+```{r Transcriptomic_data}
+# Load expression data:
+#   - Make "Names" column rownames
+#   - Make "NA" values "0"
+#   - Ignore rows with a combined (summed) TPM across samples <=100
+transcriptomic.data <- read.table("Mcapitata_V1_transcriptomic_data.tsv.TPM.txt", h = T, row.names = NULL, sep = "\t", check.names = F) %>% 
+  tibble::column_to_rownames(var = "Name") %>% 
+  replace(is.na(.), 0) %>% 
+  filter(rowSums(.) > 100)
+dim(transcriptomic.data)
+
+# Set file names
+out.prefix <- "Mcapitata_V1_transcriptomic_data"
+
+run_PERMANOVA(transcriptomic.data, samplesInfo, out.prefix)
+transcriptomic.PCA       <- plot_PCA(     transcriptomic.data, samplesInfo, out.prefix, "Transcriptomic data (PCA)")
+transcriptomic.PCoA      <- plot_PCoA(    transcriptomic.data, samplesInfo, out.prefix, "Transcriptomic data (PCoA)")
+transcriptomic.PLSDA     <- plot_PLSDA(   transcriptomic.data, samplesInfo, out.prefix, "Transcriptomic data (sPLS-DA)")
+```
+
+
+
+
+
+# Analyze transcriptomic data that overlaps with proteomic data
+
+```{r Transcriptomic-Proteomic-Overlap_data}
+# Load expression data:
+#   - Make "Names" column rownames
+#   - Make "NA" values "0"
+#   - Ignore rows with a combined (summed) TPM across samples <=100
+#   - **Keep only rows in proteomic data**
+trans_prot_overlap.data <- transcriptomic.data %>%
+  filter(row.names(.) %in% rownames(proteomic.data))
+dim(trans_prot_overlap.data)
+
+# Set file names
+out.prefix <- "Mcapitata_V1_transcriptomic-proteomic_overlap_data"
+
+run_PERMANOVA(trans_prot_overlap.data, samplesInfo, out.prefix)
+trans_prot_overlap.PCA       <- plot_PCA(     trans_prot_overlap.data, samplesInfo, out.prefix, "Transcripts with proteomic evidence (PCA)")
+trans_prot_overlap.PCoA      <- plot_PCoA(    trans_prot_overlap.data, samplesInfo, out.prefix, "Transcripts with proteomic evidence (PCoA)")
+trans_prot_overlap.PLSDA     <- plot_PLSDA(   trans_prot_overlap.data, samplesInfo, out.prefix, "Transcripts with proteomic evidence (sPLS-DA)")
+```
+
+
+
+
+
+# Combined plots
+
+```{r combined_plot_main}
+ggarrange(proteomic.PCoA, transcriptomic.PCoA, trans_prot_overlap.PCoA,
+          ncol = 2, nrow = 2,
+          labels = "AUTO",
+          font.label = list(size = 24, color = "black", face = "bold", family = "Helvetica"),
+          hjust = -3,
+          common.legend = TRUE,
+          legend = "right")
+```
+
+
+```{r combined_plot_supp}
+ggarrange(proteomic.PLSDA, transcriptomic.PLSDA, trans_prot_overlap.PLSDA,
+          proteomic.PCA,   transcriptomic.PCA,   trans_prot_overlap.PCA,
+          ncol = 3, nrow = 2,
+          labels = "AUTO",
+          font.label = list(size = 24, color = "black", face = "bold", family = "Helvetica"),
+          hjust = -0.2,
+          common.legend = TRUE,
+          legend = "right")
+```
+
+
+
+
+
+# Session Info
+
+```{r ressionInfo}
+sessionInfo()
+```
